@@ -47,15 +47,49 @@
 
 ## Tool Inventory
 
-<!-- Four lines per tool. This is worth 2 points and it's the single most
-     common place students lose them.
+### 1. `search_listings`
 
-     "Returns a list" earns NOTHING. The description has to say what is IN
-     the list.
+- **What it does:** Searches the listings data for items that match a keyword description, optionally filtered by size and a maximum price, and returns the best matches first.
+- **Inputs:**
+  - `description` (str): keywords describing the item, e.g. `"vintage graphic tee"`.
+  - `size` (str or None): a size to filter by, e.g. `"M"` or `"9"`. `None` skips size filtering.
+  - `max_price` (float or None): highest price allowed, inclusive. `None` skips price filtering.
+- **Returns:** A list of listing dicts, highest score first, at most `config.SEARCH_RESULT_LIMIT` long. Each dict has `id`, `title`, `description`, `category`, `style_tags` (list), `size`, `condition`, `price` (float), `colors` (list), `brand` (str or None), and `platform`.
+  - **Size match rule:** the listing's `size` is split on `/` and spaces into tokens, and a listing matches only if one token equals the requested size exactly, ignoring case. `"M"` matches `"S/M"` and `"m"`. `"S"` does **not** match `"XS"` or `"US 9"`. `"9"` matches `"US 9"`.
+  - **Price rule:** keep a listing only if `price <= max_price`.
+  - **Scoring:** the description is lowercased and split into words. A listing's score is the number of those words that appear in its `title`, `description`, `category`, `style_tags` or `colors` (and `brand` when it isn't None). Listings with a score of 0 are dropped. Ties keep the order they had in the data.
+- **When nothing matches:** returns an empty list `[]`. It never returns `None` and never raises.
 
-     The empty case isn't optional either — it's the thing your loop branches
-     on, and if you don't decide it here you'll discover it as a crash in
-     Milestone 5. -->
+### 2. `suggest_outfit`
+
+- **What it does:** Asks the model for one or two outfits built around the new item, using pieces from the user's wardrobe when it has any.
+- **Inputs:**
+  - `new_item` (dict): one listing dict, in the format `search_listings` returns.
+  - `wardrobe` (dict): a dict with an `"items"` key holding a list of wardrobe item dicts. The list may be empty.
+- **Returns:** A non-empty string with one or two outfit suggestions. When the wardrobe has items, each outfit names specific pieces from `wardrobe["items"]`.
+- **When there's nothing to work with:** if `wardrobe["items"]` is empty, it returns a non-empty string of general styling advice for the item (what kinds of pieces pair well with it), and never returns `""` or raises. If the model can't be reached, `generate()` raises `ModelUnavailable`, which the loop handles (unit 4).
+
+### 3. `create_fit_card`
+
+- **What it does:** Asks the model for a short, social-media-style caption about the find and the outfit.
+- **Inputs:**
+  - `outfit` (str): the outfit suggestion returned by `suggest_outfit`.
+  - `new_item` (dict): the listing dict for the item.
+- **Returns:** A 2–4 sentence caption string that reads like a real post rather than a product description. It mentions the item, its `price` and its `platform` once each, and is specific about the vibe. It leaves the brand out when `brand` is None. Uses a temperature above 0 with caching off, so different runs produce different wording.
+- **When there's nothing to work with:** if `outfit` is empty or only whitespace, it returns the string `"Can't create a fit card: no outfit suggestion was provided."` without calling the model and without raising.
+
+### Helper: `parse_query`
+
+- **What it does:** Uses regex to split the user's plain-language query into a description, a size and a max price. It does not call the model.
+- **Input:** `query` (str), e.g. `"vintage graphic tee under $30, size M"`.
+- **Returns:** a dict with exactly three keys: `description` (str), `size` (str or None, uppercased) and `max_price` (float or None). For example: `{"description": "vintage graphic tee", "size": "M", "max_price": 30.0}`.
+- **When there's nothing to parse:** `size` and `max_price` are `None`, and `description` is `""` if no keywords are left.
+
+## The Branch
+
+**If `search_listings` returns an empty list,** set `session["error"]` to a message that tells the user what to change (raise the budget, try another size, or use broader keywords), then stop and return the session without calling `suggest_outfit` or `create_fit_card`.
+
+**Otherwise,** put the first result in `session["selected_item"]`, then call `suggest_outfit` and then `create_fit_card`.
 
 ### `search_listings`
 

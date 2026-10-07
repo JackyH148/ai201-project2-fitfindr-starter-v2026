@@ -42,59 +42,52 @@ Given a query that matches no listings, the agent stops before calling
 
 ---
 
-## 3. Something about state
+## 3. The selected item survives the whole run unchanged
 
-<!-- YOU WRITE THIS ONE.
-
-     How would you know that the item your search found is the same item the
-     next tool received? Name something countable or observable.
-
-     This is the criterion people find hardest, because state failure doesn't
-     look like state failure — it looks like a tool problem. Something that
-     compares session["selected_item"] against what actually reached
-     suggest_outfit is the shape you're after. -->
-
-
+For 5 matching queries, the `id` of `session["search_results"][0]`, the `id` of
+`session["selected_item"]`, and the `id` of the `new_item` that reached both
+`suggest_outfit` and `create_fit_card` are all the same
 
 **Why this target:**
-
-
+Passing an item from one step to the next is plain Python with no model
+involved, so it should never fail. If it does, the cause is something like
+reading the wrong session key or overwriting `selected_item`, and that would
+make the outfit and the fit card describe a different item than the user was
+shown. I compare `id` rather than title because two listings can share a
+title, but each `id` is unique.
 
 ---
 
-## 4. Something about the fit card
+## 4. The fit card is a real caption about the right item
 
-<!-- YOU WRITE THIS ONE.
-
-     The fit card calls a model, so the same input can produce different words
-     each time. That's not a bug — it's the nature of the tool. So what would
-     make it acceptable?
-
-     Think about what you'd actually be unhappy to see. A caption that never
-     mentions the price? Two different items producing the same opening
-     sentence? A card longer than a caption anyone would post? Any of those can
-     be turned into a number. -->
-
-
+For 5 different matching items, each fit card (a) is 2–4 sentences long, contains that item's
+exact price (e.g. `$24`) and its `platform` name, and does not start with the same first sentence
+as any of the other four cards. At least 4 of 5 cards meet all three conditions.
 
 **Why this target:**
-
-
+I can't check the exact wording, since the model is meant to vary, but I can
+check the things I'd be unhappy to see: a caption too long to post, one
+missing the price or platform the docstring requires, or a template-like
+opening repeated across items. I allow one miss because the model sometimes
+rewrites a price (writing "twenty-four bucks" or "$24.00") or adds a fifth
+sentence even when the prompt asks for 2–4. Fewer than 4 of 5 would mean my
+prompt isn't steering it well enough.
 
 ---
 
-## 5. Your choice
+## 5. Search respects the size and price the user asked for
 
-<!-- YOU WRITE THIS ONE TOO.
-
-     Pick something you actually care about getting right. Speed, the empty
-     wardrobe path, what happens when the model can't be reached, whether the
-     search respects a price ceiling — anything, as long as it names a number
-     or an observable outcome. -->
-
-
+For 5 queries that include both a size and a max price, every listing in
+`session["search_results"]` has `price <= max_price` and a size token that
+exactly matches the requested size. That's 5 of 5 queries, with 0 listings breaking the rule.
 
 **Why this target:**
+These filters are deterministic code with no model, so a single listing over
+budget or in the wrong size is a bug. The `search_listings` docstring warns
+that a plain substring check makes `"s" in "us 9"` True. This criterion
+catches that exact mistake. Allowing even one bad listing would hide that
+bug, and a shopper who sees an over-budget item stops trusting every
+result after it.
 
 
 

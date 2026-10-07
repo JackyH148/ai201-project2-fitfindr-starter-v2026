@@ -81,7 +81,49 @@ def search_listings(
         python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
     """
     # TODO: replace this with your implementation
-    return []
+        # Words too common to count as a keyword match.
+    stopwords = {"a", "an", "the", "and", "or", "for", "with", "in", "of", "to", "on"}
+    keywords = [
+        w for w in re.findall(r"[a-z0-9]+", (description or "").lower())
+        if w not in stopwords
+    ]
+
+    wanted_size = size.strip().lower() if size else None
+    results = []
+
+    # 1. Load every listing.
+    for listing in load_listings():
+
+        # 2a. Price filter (inclusive).
+        if max_price is not None and float(listing.get("price", 0)) > max_price:
+            continue
+
+        # 2b. Size filter: split "S/M" or "US 9" into tokens and require an
+        # exact token match, so "s" never matches "xs" or "us 9".
+        if wanted_size:
+            size_tokens = re.split(r"[/\s,]+", str(listing.get("size", "")).lower())
+            if wanted_size not in size_tokens:
+                continue
+
+        # 3. Score by keyword overlap across the searchable fields.
+        searchable = " ".join([
+            str(listing.get("title", "")),
+            str(listing.get("description", "")),
+            str(listing.get("category", "")),
+            " ".join(listing.get("style_tags") or []),
+            " ".join(listing.get("colors") or []),
+            listing.get("brand") or "",          # brand is often None
+        ]).lower()
+        searchable_words = set(re.findall(r"[a-z0-9]+", searchable))
+        score = sum(1 for w in keywords if w in searchable_words)
+
+        # 4. Drop zero scores.
+        if score > 0:
+            results.append((score, listing))
+
+    # 5. Highest score first. sort() is stable, so ties keep data order.
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [listing for _, listing in results][: config.SEARCH_RESULT_LIMIT]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -115,7 +157,35 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
     """
     # TODO: replace this with your implementation
-    return ""
+    item_text = _describe_item(new_item)
+    items = (wardrobe or {}).get("items") or []
+
+    # 1–2. Empty wardrobe: general advice instead of failing.
+    if not items:
+        prompt = (
+            "A shopper is thinking about buying this thrifted item:\n"
+            f"{item_text}\n\n"
+            "They haven't told us what's in their wardrobe. Give general styling "
+            "advice: suggest 2 outfits built around this item, naming the kinds "
+            "of pieces that pair well with it (e.g. 'straight-leg dark jeans', "
+            "'chunky white sneakers'). Keep it under 120 words."
+        )
+    # 3. Wardrobe has items: name pieces they already own.
+    else:
+        wardrobe_lines = "\n".join(f"- {_describe_wardrobe_item(w)}" for w in items)
+        prompt = (
+            "A shopper is thinking about buying this thrifted item:\n"
+            f"{item_text}\n\n"
+            "Here is what they already own:\n"
+            f"{wardrobe_lines}\n\n"
+            "Suggest 1 or 2 outfits that pair the new item with specific pieces "
+            "from their wardrobe. Name the wardrobe pieces exactly as listed. "
+            "Keep it under 120 words."
+        )
+
+    # 4. Return the model's response, with a fallback so it's never "".
+    response = (generate(prompt) or "").strip()
+    return response or f"Try styling the {new_item.get('title', 'item')} with simple basics in neutral colors."
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -155,7 +225,30 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
     """
     # TODO: replace this with your implementation
-    return ""
+        # 1. Guard against an empty outfit.
+    if not outfit or not outfit.strip():
+        return "Can't create a fit card: no outfit suggestion was provided."
+
+    # 2. Build the prompt.
+    price = new_item.get("price")
+    price_text = f"${price:g}" if isinstance(price, (int, float)) else str(price)
+
+    prompt = (
+        "Write a 2 to 4 sentence social media caption about a thrift find. "
+        "It should sound like a real person posting, not a product listing.\n\n"
+        f"Item: {new_item.get('title', 'thrifted item')}\n"
+        f"Price: {price_text}\n"
+        f"Platform: {new_item.get('platform', 'a thrift app')}\n"
+        f"Style tags: {', '.join(new_item.get('style_tags') or [])}\n"
+        f"Outfit: {outfit}\n\n"
+        f"Rules: mention the item, the price written exactly as {price_text}, "
+        "and the platform once each. Be specific about the vibe. "
+        "No hashtags, and no more than 4 sentences."
+    )
+
+    # 3. Call the model.
+    caption = (generate(prompt) or "").strip()
+    return caption or f"Found this {new_item.get('title', 'piece')} for {price_text} on {new_item.get('platform', 'a thrift app')}."
 
 
 
@@ -227,3 +320,31 @@ def parse_query(query: str) -> dict:
     description = " ".join(text.split())   # collapse extra spaces
 
     return {"description": description, "size": size, "max_price": max_price}
+
+
+def _describe_item(item: dict) -> str:
+    """One readable line about a listing, skipping fields that are missing."""
+    parts = [str(item.get("title", "Unknown item"))]
+    if item.get("brand"):
+        parts.append(f"by {item['brand']}")
+    if item.get("colors"):
+        parts.append(f"in {', '.join(item['colors'])}")
+    if item.get("size"):
+        parts.append(f"size {item['size']}")
+    if item.get("condition"):
+        parts.append(f"({item['condition']} condition)")
+    if item.get("style_tags"):
+        parts.append(f"— style: {', '.join(item['style_tags'])}")
+    return " ".join(parts)
+
+
+def _describe_wardrobe_item(item) -> str:
+    """Wardrobe items may be strings or dicts; turn either into one line."""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        name = item.get("name") or item.get("title") or item.get("item")
+        extras = [str(v) for k, v in item.items()
+                  if k not in ("name", "title", "item", "id") and v and not isinstance(v, (list, dict))]
+        return f"{name} ({', '.join(extras)})" if name and extras else (name or ", ".join(extras))
+    return str(item)
