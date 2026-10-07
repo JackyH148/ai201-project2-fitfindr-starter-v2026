@@ -39,7 +39,9 @@
 
 ## What This Does
 
-<!-- Three or four sentences: what a user asks for, and what they get back. -->
+FitFindr helps you shop for secondhand clothes. You type what you want in plain words, like "vintage graphic tee under $30, size M". It searches the thrift listings for the best match within your size and budget, then suggests outfits that pair the item with clothes you already own. Finally, it writes a short social-media caption (a "fit card") about the find. If nothing matches, it stops and tells you what to change, such as raising your budget or trying a different size.
+
+
 
 
 
@@ -116,16 +118,23 @@
 
 ## Planning Loop
 
-<!-- Your branch rule, stated as a rule — the condition AND both paths — plus
-     the file and function that holds it.
+**Branch rule:** If `search_listings` returns an empty list, put a message in `session["error"]` that tells the user what to change (raise the budget, try another size, or use broader words), then stop and return the session without calling `suggest_outfit` or `create_fit_card`. Otherwise, put the first result in `session["selected_item"]`, then call `suggest_outfit`, and then `create_fit_card`.
 
-     Like this:
-       "If search_listings returns an empty list, put a message in the session
-        and stop. Otherwise take the first result and go to suggest_outfit."
-        — agent.py::run_agent
+**Where it lives:** `agent.py::run_agent`
 
-     The grader checks your code against what you claim here, so the file and
-     function have to be real. -->
+**How the query is parsed:** Regex, in `tools.py::parse_query`. It finds the price ("under $30", "below 30", "max $30"), the size ("size M" or a size word like "XXS"), and uses the leftover words as the description.
+
+**What moves through the session:** Each step saves its result in the session, and the next step reads it back from there. The order is:
+
+1. `query` → `parse_query` → `parsed`
+2. `parsed` → `search_listings` → `search_results`
+3. **Branch:** if `search_results` is empty → `error` is set and the run stops
+4. `search_results[0]` → `selected_item`
+5. `selected_item` + `wardrobe` → `suggest_outfit` → `outfit_suggestion` (the item passed in is also saved as `item_sent_to_outfit`, so I can check it matches `selected_item`)
+6. `outfit_suggestion` + `selected_item` → `create_fit_card` → `fit_card`
+
+The loop is a `while` loop driven by a `next_step` variable. Every pass calls `trace.check_iterations(count)` so it can never run forever.
+
 
 **Branch rule:**
 
@@ -139,10 +148,62 @@
 
 ## Sample Run
 
-<!-- Two things go here.
+**One full query**
 
-     1. One FULL query and its output, pasted as text.
-     2. Your three per-tool terminal tests — the command and what it printed. -->
+```
+$ python app.py ask 'vintage graphic tee under $30'
+
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+
+  Outfit:   **Outfit 1: Casual Y2K Streetwear**
+Pair the Y2K Baby Tee with the baggy straight-leg jeans (dark wash) and the brown leather belt to accentuate your waist. Layer the black cropped zip hoodie over top, and finish the look with the chunky white sneakers and the black crossbody bag.
+
+**Outfit 2: Edgy Contrast**
+Tuck the Y2K Baby Tee into the wide-leg khaki trousers. Layer the vintage black denim jacket over it, and ground the outfit with the black combat boots for a cool, mixed-aesthetic vibe.
+
+  Fit card: Found this adorable butterfly baby tee on depop for only $18 and I’m literally obsessed. It gives off major early 2000s mallrat energy, especially when you style it with baggy dark-wash jeans and a chunky belt. Honestly such a steal for a piece this nostalgic!
+```
+
+**The three tools, tested one at a time**
+
+```
+$ python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
+[{'id': 'lst_002', 'title': 'Y2K Baby Tee — Butterfly Print', 'description': 'Super cute early 2000s baby tee with butterfly graphic. Fitted crop length. Tag says medium but fits like a small.', 'category': 'tops', 'style_tags': ['y2k', 'vintage', 'graphic tee', 'cottagecore'], 'size': 'S/M', 'condition': 'excellent', 'price': 18.0, 'colors': ['white', 'pink', 'purple'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', 'description': 'Vintage-style bootleg tee with faded graphic. Slightly boxy fit. 100% cotton, soft and worn-in.', 'category': 'tops', 'style_tags': ['graphic tee', 'vintage', 'grunge', 'streetwear', 'band tee'], 'size': 'L', 'condition': 'good', 'price': 24.0, 'colors': ['black'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_017', 'title': 'Mesh Long-Sleeve Top — Black', 'description': 'Sheer black mesh long-sleeve. Great for layering under a graphic tee or over a bralette. Stretchy material, fits true to size.', 'category': 'tops', 'style_tags': ['y2k', 'grunge', 'goth', 'layering'], 'size': 'S/M', 'condition': 'excellent', 'price': 15.0, 'colors': ['black'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_033', 'title': 'Vintage Band Tee — Faded Grey', 'description': 'Faded grey band-style tee with distressed graphic. Crew neck. Fits boxy. Well-loved but no holes or major damage.', 'category': 'tops', 'style_tags': ['vintage', 'grunge', 'band tee', 'graphic tee', 'streetwear'], 'size': 'L', 'condition': 'fair', 'price': 19.0, 'colors': ['grey', 'charcoal'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_011', 'title': 'Low-Rise Cargo Pants — Khaki', 'description': 'Y2K era low-rise cargo pants. Lots of pockets. Khaki color, slightly distressed at the hems. Great for layering with a long tee.', 'category': 'bottoms', 'style_tags': ['y2k', 'cargo', '2000s', 'streetwear'], 'size': 'W29', 'condition': 'fair', 'price': 27.0, 'colors': ['khaki', 'tan'], 'brand': None, 'platform': 'poshmark'}, {'id': 'lst_015', 'title': 'Vintage Graphic Hoodie — Faded Black', 'description': 'Faded black pullover hoodie with barely-visible vintage graphic on the chest. Cozy interior. Some pilling but adds to the worn-in look.', 'category': 'tops', 'style_tags': ['vintage', 'grunge', 'graphic', 'streetwear'], 'size': 'L', 'condition': 'fair', 'price': 26.0, 'colors': ['black', 'charcoal'], 'brand': None,'platform': 'depop'}]
+```
+
+```
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
+**Outfit 1: Casual Streetwear**
+Pair the Vintage Levi's 501 Jeans with the **White ribbed tank top** tucked in, layered under the **Oversized grey crewneck sweatshirt**. Cinch the waist with the **Brown leather belt**, and finish with the **Chunky white sneakers** and **Black crossbody bag** for an effortless, classic look.
+
+**Outfit 2: Edgy Contrast**
+Style the Vintage Levi's 501 Jeans with the **Black cropped zip hoodie** and the **Vintage black denim jacket** on top for a cool denim-on-denim vibe. Add the **Brown leather belt** to define the waist, and lace up the **Black combat boots** to complete the outfit.```
+
+```
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
+**Outfit 1: Casual Streetwear**
+Pair the Vintage Levi's 501 Jeans with the **White ribbed tank top** tucked in, layered under the **Oversized grey crewneck sweatshirt**. Cinch the waist with the **Brown leather belt**, and finish with the **Chunky white sneakers** and **Black crossbody bag** for an effortless, classic look.
+
+**Outfit 2: Edgy Contrast**
+Style the Vintage Levi's 501 Jeans with the **Black cropped zip hoodie** and the **Vintage black denim jacket** on top for a cool denim-on-denim vibe. Add the **Brown leather belt** to define the waist, and lace up the **Black combat boots** to complete the outfit.
+(.venv) (base) jacky@Jackys-MacBook-Pro ai201-project2-fitfindr-starter-v2026 % python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
+Finally scored these vintage Levi's 501s and I am never taking them off. Found them on depop for just $38, which feels like an absolute steal for this exact medium wash. Threw them on with my beat-up white sneakers for that effortlessly lazy 90s streetwear vibe.```
+
+---
+
+## How I Used AI
+
+**Moment 1**
+
+- *What I asked for:* I gave Claude the TODO steps in `agent.py` and asked it to build `run_agent`.
+- *What came back:* A working `while` loop with the branch, but Claude put a new `parse_query` function inside `agent.py`. It also guessed the argument names for `search_listings` because it couldn't see my `tools.py`.
+- *What I changed:* I moved `parse_query` into `tools.py` so I could test it from the terminal on its own, like the other tools. I imported it into `agent.py` and checked that the `search_listings` call matched my real parameter names (`description`, `size`, `max_price`).
+
+**Moment 2**
+
+- *What I asked for:* The milestone said every step must read its input from the session, not pass values straight from one call to the next. I asked Claude to check my loop against that rule.
+- *What came back:* It found two problems. The parse step used the `query` argument instead of `session["query"]`, and nothing recorded which item actually reached `suggest_outfit`, so I couldn't prove it was the same as `selected_item`.
+- *What I changed:* I made the parse step read `session["query"]` and added a session field, `item_sent_to_outfit`. I also added PASS/FAIL checks at the bottom of `agent.py` that compare its `id` to `selected_item`, and confirm `fit_card` is still `None` on the no-match query.
 
 **One full query**
 

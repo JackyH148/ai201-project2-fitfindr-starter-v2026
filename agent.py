@@ -1,4 +1,3 @@
-from tools import parse_query
 """
 The FitFindr planning loop.
 
@@ -16,7 +15,7 @@ Build and test your three tools in `tools.py` first. Then come here.
 
 import config
 import trace
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import parse_query, search_listings, suggest_outfit, create_fit_card
 from generate import ModelUnavailable
 
 
@@ -41,6 +40,7 @@ def new_session(query: str, wardrobe: dict) -> dict:
         "parsed": {},                # description / size / max_price you pulled out of it
         "search_results": [],        # everything search_listings returned
         "selected_item": None,       # the one you chose — goes into suggest_outfit
+        "item_sent_to_outfit": None, # the exact item passed to suggest_outfit (for checking state)
         "wardrobe": wardrobe,        # the user's wardrobe
         "outfit_suggestion": None,   # what suggest_outfit returned
         "fit_card": None,            # what create_fit_card returned
@@ -64,40 +64,19 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         The session dict. **Check session["error"] first** — if it isn't None,
         the run ended early and the later fields will still be None.
 
-    ─────────────────────────────────────────────────────────────────────────
-    TODO — build this, following the branch rule you wrote in Milestone 2.
+    How it works:
+        A while loop driven by `next_step`. Each pass runs one step, stores the
+        result in the session, and picks the next step based on that result.
+        Every step reads its inputs back out of the session — no values are
+        passed straight from one tool call to the next.
 
-      1. Start a session with new_session().
-    
-      2. Count the times round the loop, and call trace.check_iterations(count)
-         on each one before you go again. It raises when the count passes
-         MAX_ITERATIONS in config.py — see trace.py.
+        Parsing uses regex (see parse_query in tools.py).
 
-      3. Parse the query into a description, a size, and a max_price. Regex,
-         string splitting, or asking the model are all fine — say which you
-         chose in your README. Put the result in session["parsed"].
+        The branch: if search_listings returns an empty list, set
+        session["error"] to a message naming what the user could change, and
+        stop without calling suggest_outfit or create_fit_card. Otherwise,
+        select the first result and continue.
 
-      4. Call search_listings() with what you parsed.
-         Put the results in session["search_results"].
-
-         ⚠️ THIS IS THE BRANCH. If nothing came back:
-              - put a message in session["error"] saying what the user could
-                change — "No results" is not that message
-              - return the session
-              - do NOT call suggest_outfit with nothing
-
-      5. Choose an item — the first result is fine. Put it in
-         session["selected_item"].
-
-      6. Call suggest_outfit() with the selected item and the wardrobe.
-         Put the result in session["outfit_suggestion"].
-
-      7. Call create_fit_card() with the outfit and the item.
-         Put the result in session["fit_card"].
-
-      8. Return the session.
-
-    ─────────────────────────────────────────────────────────────────────────
     IN UNIT 4 you come back and add two things:
 
       • Trace calls. One per step. `trace.step("search_listings", inputs=...,
@@ -120,9 +99,9 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         count += 1
         trace.check_iterations(count)
 
-        # 3. Parse the query.
+        # 3. Parse the query — read it from the session.
         if next_step == "parse":
-            session["parsed"] = parse_query(query)
+            session["parsed"] = parse_query(session["query"])
             next_step = "search"
 
         # 4. Search, then BRANCH on what came back.
@@ -152,19 +131,19 @@ def run_agent(query: str, wardrobe: dict) -> dict:
             else:
                 next_step = "select"
 
-        # 5. Choose an item.
+        # 5. Choose an item — read the results from the session.
         elif next_step == "select":
             session["selected_item"] = session["search_results"][0]
             next_step = "outfit"
 
-        # 6. Suggest an outfit.
+        # 6. Suggest an outfit — read the item and wardrobe from the session.
         elif next_step == "outfit":
-            session["outfit_suggestion"] = suggest_outfit(
-                session["selected_item"], session["wardrobe"]
-            )
+            item = session["selected_item"]
+            session["item_sent_to_outfit"] = item      # record what actually went in
+            session["outfit_suggestion"] = suggest_outfit(item, session["wardrobe"])
             next_step = "fit_card"
 
-        # 7. Create the fit card.
+        # 7. Create the fit card — read the outfit and item from the session.
         elif next_step == "fit_card":
             session["fit_card"] = create_fit_card(
                 session["outfit_suggestion"], session["selected_item"]
@@ -173,6 +152,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
     # 8. Return the session.
     return session
+
 
 # ── running it directly ───────────────────────────────────────────────────────
 
@@ -189,21 +169,40 @@ def _show(session: dict) -> None:
 
 
 if __name__ == "__main__":
+    from pprint import pprint
     from utils.data_loader import get_example_wardrobe
 
+    def _print_session(session):
+        # Leave out the wardrobe so the printout stays readable.
+        pprint({k: v for k, v in session.items() if k != "wardrobe"}, width=100)
+
+    # ── Happy path ──
     print("=== A query the data can match ===")
-    _show(run_agent(
+    happy = run_agent(
         query="looking for a vintage graphic tee under $30",
         wardrobe=get_example_wardrobe(),
-    ))
+    )
+    _show(happy)
+    print("\n--- full session ---")
+    _print_session(happy)
 
+    if not happy["error"]:
+        selected_id = happy["selected_item"]["id"]
+        sent_id = happy["item_sent_to_outfit"]["id"]
+        print(f"\nCHECK selected_item id = {selected_id}, item sent to suggest_outfit id = {sent_id}")
+        print("CHECK same item:", "PASS" if selected_id == sent_id else "FAIL")
+
+    # ── No-match path ──
     print("\n=== A query it can't ===")
-    _show(run_agent(
+    empty = run_agent(
         query="designer ballgown size XXS under $5",
         wardrobe=get_example_wardrobe(),
-    ))
-
-    print(
-        "\nThe second one should stop before the fit card. If both paths look "
-        "the same,\nthe branch isn't doing anything yet."
     )
+    _show(empty)
+    print("\n--- full session ---")
+    _print_session(empty)
+
+    print("\nCHECK fit_card is None:", "PASS" if empty["fit_card"] is None else "FAIL")
+    print("CHECK suggest_outfit not called:", "PASS" if empty["item_sent_to_outfit"] is None else "FAIL")
+    print("CHECK error is more than 'No results':",
+          "PASS" if empty["error"] and "You could" in empty["error"] else "FAIL")
