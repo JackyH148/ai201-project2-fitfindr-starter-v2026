@@ -1,3 +1,5 @@
+import re
+
 """
 The three FitFindr tools.
 
@@ -154,3 +156,74 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
     """
     # TODO: replace this with your implementation
     return ""
+
+
+
+# ── Helper: parse_query ───────────────────────────────────────────────────────
+
+SIZES = ["XXS", "XS", "S", "M", "L", "XL", "XXL"]
+
+def parse_query(query: str) -> dict:
+    """
+    Pull a description, size, and max_price out of a plain-language query
+    using regex. Does not call the model.
+
+    Args:
+        query: what the user typed, e.g. "vintage graphic tee under $30, size M".
+
+    Returns:
+        A dict with exactly three keys:
+            description (str):          the leftover keywords, e.g. "vintage graphic tee".
+                                        "" if nothing is left.
+            size (str or None):         uppercased size, e.g. "M" or "9". None if not given.
+            max_price (float or None):  the price ceiling, e.g. 30.0. None if not given.
+
+    Examples:
+        parse_query("vintage graphic tee under $30, size M")
+            -> {"description": "vintage graphic tee", "size": "M", "max_price": 30.0}
+        parse_query("designer ballgown size XXS under $5")
+            -> {"description": "designer ballgown", "size": "XXS", "max_price": 5.0}
+        parse_query("denim jacket")
+            -> {"description": "denim jacket", "size": None, "max_price": None}
+
+    Test it from a terminal:
+        python -c "from tools import parse_query; print(parse_query('vintage graphic tee under \$30, size M'))"
+    """
+    text = query or ""
+
+    # max_price: "under $30", "below 30", "less than $30.50", "max $30", "< 30"
+    max_price = None
+    price_match = re.search(
+        r"(?:under|below|less than|max|<)\s*\$?(\d+(?:\.\d+)?)", text, re.IGNORECASE
+    )
+    if price_match:
+        max_price = float(price_match.group(1))
+        text = text.replace(price_match.group(0), " ")
+
+    # size: "size M", "size: xl", "size 9", or a standalone size like "XXS"
+    size = None
+    size_match = re.search(r"\bsize[:\s]*([a-z]{1,3}|\d+(?:\.\d+)?)\b", text, re.IGNORECASE)
+    if size_match:
+        size = size_match.group(1).upper()
+        text = text.replace(size_match.group(0), " ")
+    else:
+        # Case-sensitive on purpose, so the "s" or "m" inside ordinary words
+        # never counts as a size.
+        for s in SIZES:
+            standalone = re.search(rf"\b{s}\b", text)
+            if standalone:
+                size = s
+                text = text.replace(standalone.group(0), " ")
+                break
+
+    # description: whatever is left, minus filler words and punctuation
+    text = re.sub(
+        r"\b(looking for|i want|i need|find me|show me|a|an|some)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"[,.!?$]", " ", text)
+    description = " ".join(text.split())   # collapse extra spaces
+
+    return {"description": description, "size": size, "max_price": max_price}

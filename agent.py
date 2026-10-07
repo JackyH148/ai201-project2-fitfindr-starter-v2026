@@ -1,3 +1,4 @@
+from tools import parse_query
 """
 The FitFindr planning loop.
 
@@ -67,7 +68,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     TODO — build this, following the branch rule you wrote in Milestone 2.
 
       1. Start a session with new_session().
-
+    
       2. Count the times round the loop, and call trace.check_iterations(count)
          on each one before you go again. It raises when the count passes
          MAX_ITERATIONS in config.py — see trace.py.
@@ -105,12 +106,73 @@ def run_agent(query: str, wardrobe: dict) -> dict:
       • A handler for ModelUnavailable, so a bad key produces a message rather
         than a stack trace. The import is already at the top of this file.
     """
+    # 1. Start a session.
     session = new_session(query, wardrobe)
 
-    # TODO: delete these two lines and build the loop.
-    session["error"] = "The planning loop isn't built yet — see the TODO in agent.py."
-    return session
+    # The loop: each pass looks at what the last step produced and picks the
+    # next step. "done" ends the loop.
+    next_step = "parse"
+    count = 0
 
+    while next_step != "done":
+
+        # 2. Count every pass and check it before doing more work.
+        count += 1
+        trace.check_iterations(count)
+
+        # 3. Parse the query.
+        if next_step == "parse":
+            session["parsed"] = parse_query(query)
+            next_step = "search"
+
+        # 4. Search, then BRANCH on what came back.
+        elif next_step == "search":
+            parsed = session["parsed"]
+            session["search_results"] = search_listings(
+                description=parsed["description"],
+                size=parsed["size"],
+                max_price=parsed["max_price"],
+            )
+
+            if not session["search_results"]:
+                # ⚠️ The branch: nothing matched, so stop here and tell the
+                # user what they could change.
+                hints = []
+                if parsed["max_price"] is not None:
+                    hints.append(f"raise your budget above ${parsed['max_price']:g}")
+                if parsed["size"]:
+                    hints.append(f"try a size other than {parsed['size']}")
+                hints.append(f"use broader words than \"{parsed['description']}\"")
+
+                session["error"] = (
+                    "No listings matched your search. You could "
+                    + ", or ".join(hints) + "."
+                )
+                next_step = "done"          # do NOT go on to suggest_outfit
+            else:
+                next_step = "select"
+
+        # 5. Choose an item.
+        elif next_step == "select":
+            session["selected_item"] = session["search_results"][0]
+            next_step = "outfit"
+
+        # 6. Suggest an outfit.
+        elif next_step == "outfit":
+            session["outfit_suggestion"] = suggest_outfit(
+                session["selected_item"], session["wardrobe"]
+            )
+            next_step = "fit_card"
+
+        # 7. Create the fit card.
+        elif next_step == "fit_card":
+            session["fit_card"] = create_fit_card(
+                session["outfit_suggestion"], session["selected_item"]
+            )
+            next_step = "done"
+
+    # 8. Return the session.
+    return session
 
 # ── running it directly ───────────────────────────────────────────────────────
 
