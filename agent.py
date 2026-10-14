@@ -16,7 +16,7 @@ Build and test your three tools in `tools.py` first. Then come here.
 import config
 import trace
 from tools import parse_query, suggest_outfit, create_fit_card
-from mcp_client import call_tool
+from mcp_client import call_tool, MCPError
 from generate import ModelUnavailable
 
 
@@ -50,6 +50,11 @@ def new_session(query: str, wardrobe: dict) -> dict:
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
+
+def _kv(d: dict) -> str:
+    """Show a dict as key=value pairs, so the trace shows values, not just keys."""
+    return ", ".join(f"{k}={v!r}" for k, v in d.items())
+
 
 def run_agent(query: str, wardrobe: dict) -> dict:
     """
@@ -103,16 +108,29 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         # 3. Parse the query — read it from the session.
         if next_step == "parse":
             session["parsed"] = parse_query(session["query"])
+            trace.step("parse_query", inputs=session["query"],
+                       returned=_kv(session["parsed"]))
             next_step = "search"
 
         # 4. Search, then BRANCH on what came back.
         elif next_step == "search":
             parsed = session["parsed"]
-            session["search_results"] = call_tool("search_listings", {
+            search_args = {
                 "description": parsed["description"],
                 "size": parsed["size"],
                 "max_price": parsed["max_price"],
-            })
+            }
+            try:
+                session["search_results"] = call_tool("search_listings", search_args)
+            except MCPError:
+                session["error"] = (
+                    "The listing search couldn't be reached, so nothing was searched. "
+                    "Check that `python mcp_server.py` starts without errors, then try again."
+                )
+                trace.step("search_listings (via MCP)", inputs=_kv(search_args),
+                           note="MCPError: server unreachable, stopping")
+                next_step = "done"
+                continue
 
             if not session["search_results"]:
                 # ⚠️ The branch: nothing matched, so stop here and tell the
@@ -129,26 +147,70 @@ def run_agent(query: str, wardrobe: dict) -> dict:
                     + ", or ".join(hints) + "."
                 )
                 next_step = "done"          # do NOT go on to suggest_outfit
+                trace.step("search_listings (via MCP)", inputs=_kv(search_args),
+                           returned=session["search_results"],
+                           note="branch: empty, stopping before suggest_outfit")
             else:
                 next_step = "select"
+                trace.step("search_listings (via MCP)", inputs=_kv(search_args),
+                           returned=session["search_results"],
+                           note="branch: results found, continuing")
 
         # 5. Choose an item — read the results from the session.
         elif next_step == "select":
             session["selected_item"] = session["search_results"][0]
+            trace.step("select_item",
+                       inputs=f"{len(session['search_results'])} results",
+                       returned=session["selected_item"], note="took the top match")
             next_step = "outfit"
 
         # 6. Suggest an outfit — read the item and wardrobe from the session.
         elif next_step == "outfit":
             item = session["selected_item"]
             session["item_sent_to_outfit"] = item      # record what actually went in
-            session["outfit_suggestion"] = suggest_outfit(item, session["wardrobe"])
+            outfit_inputs = {
+                "new_item": item.get("title"),
+                "wardrobe_items": len(session["wardrobe"].get("items", [])),
+            }
+            try:
+                session["outfit_suggestion"] = suggest_outfit(item, session["wardrobe"])
+            except ModelUnavailable:
+                session["error"] = (
+                    f"Found \"{item.get('title')}\" (${item.get('price'):g} on "
+                    f"{item.get('platform')}), but the styling model couldn't be reached, "
+                    "so there's no outfit or fit card. Check GEMINI_API_KEY in your .env "
+                    "and your internet connection, then try again."
+                )
+                trace.step("suggest_outfit", inputs=_kv(outfit_inputs),
+                           note="ModelUnavailable: stopping before create_fit_card")
+                next_step = "done"
+                continue
+            trace.step("suggest_outfit", inputs=_kv(outfit_inputs),
+                       returned=session["outfit_suggestion"])
             next_step = "fit_card"
 
         # 7. Create the fit card — read the outfit and item from the session.
         elif next_step == "fit_card":
-            session["fit_card"] = create_fit_card(
-                session["outfit_suggestion"], session["selected_item"]
-            )
+            fit_inputs = {
+                "outfit": session["outfit_suggestion"],
+                "new_item": session["selected_item"].get("title"),
+            }
+            try:
+                session["fit_card"] = create_fit_card(
+                    session["outfit_suggestion"], session["selected_item"]
+                )
+            except ModelUnavailable:
+                session["error"] = (
+                    "Your outfit is ready, but the model couldn't be reached to write "
+                    "the fit card. Check GEMINI_API_KEY in your .env and your internet "
+                    "connection, then try again."
+                )
+                trace.step("create_fit_card", inputs=_kv(fit_inputs),
+                           note="ModelUnavailable: no fit card")
+                next_step = "done"
+                continue
+            trace.step("create_fit_card", inputs=_kv(fit_inputs),
+                       returned=session["fit_card"])
             next_step = "done"
 
     # 8. Return the session.
