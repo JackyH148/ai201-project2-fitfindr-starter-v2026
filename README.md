@@ -331,24 +331,79 @@ that produced it:
      the same length, your branch isn't working — and this is the fastest way
      anyone will ever find that out. -->
 
-**Happy path**
+**Happy path** — `python app.py ask 'vintage graphic tee under $30, size M' --trace`
 
 ```
-
+[1] parse_query
+      in:  vintage graphic tee under $30, size M
+      out: description='vintage graphic tee', size='M', max_price=30.0
+[2] search_listings (via MCP)
+      in:  description='vintage graphic tee', size='M', max_price=30.0
+      out: 8 items: Y2K Baby Tee — Butterfly Print, Mesh Long-Sleeve Top — Black, 90s Silk Slip Dress — Floral, Midi Length … +5 more
+      →    branch: results found, continuing
+[3] select_item
+      in:  8 results
+      out: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+      →    took the top match
+[4] suggest_outfit
+      in:  new_item='Y2K Baby Tee — Butterfly Print', wardrobe_items=10
+      out: **Outfit 1: Casual Y2K Streetwear** Pair the Y2K Baby Tee with the baggy straight-leg jeans (dark wash) and th…
+[5] create_fit_card
+      in:  outfit='**Outfit 1: Casual Y2K Streetwear**\nPair the Y2K Baby Tee with the baggy straight-leg jeans (dark was…
+      out: Found this adorable butterfly baby tee on depop for only $18 and I’m literally obsessed. It gives off major ea…
 ```
 
-**Empty search**
+**Empty search** — `python app.py ask 'sequined astronaut ballgown size XXS under $2' --trace`
 
 ```
-
+[1] parse_query
+      in:  sequined astronaut ballgown size XXS under $2
+      out: description='sequined astronaut ballgown', size='XXS', max_price=2.0
+[2] search_listings (via MCP)
+      in:  description='sequined astronaut ballgown', size='XXS', max_price=2.0
+      out: [] (empty)
+      →    branch: empty, stopping before suggest_outfit
 ```
+
+The empty run stops at step 2. The happy path runs five steps.
 
 **On the MCP move:** <!-- what changed in your code, and whether anything
 behaved differently afterwards. If the rewire didn't work, say exactly where it
 broke — the error text and the last thing that worked. That earns the point in
 full. -->
 
+I registered `search_listings` in `mcp_server.py` with FastMCP and swapped the direct call in `run_agent()` for `call_tool("search_listings", {...})`. Nothing behaved differently. I called the function directly and through MCP on three queries (one of them empty) and got identical results each time. The empty case still comes back as `[]`, not `None`, so the branch still works. The only visible change is the step name in the trace: `search_listings (via MCP)`.
 
+### Failure modes
+
+| Failure | How I triggered it | What the agent said | Handled? |
+|---|---|---|---|
+| Empty search | `python app.py ask 'sequined astronaut ballgown size XXS under $2'` | "No listings matched your search. You could raise your budget above $2, or try a size other than XXS, or use broader words than "sequined astronaut ballgown"." 0 model calls. | Yes, already by the branch. |
+| Empty wardrobe | `python app.py ask 'black leather jacket under $80' --empty-wardrobe` | Found the 90s Leather Bomber ($75, depop) and gave two general outfits ("distressed band tee, straight-leg dark denim, combat boots…") plus a fit card. No crash, no empty string. | Yes, already by `suggest_outfit`. |
+| Model unavailable | Changed one character of the key, then asked a new query: `'chunky knit cardigan for fall'` | **Before:** `run_agent()` raised `ModelUnavailable`. The message only appeared because `app.py`'s catch-all `except Exception` caught it, so the run exited with code 1 and the session was lost. **After:** "Found "Knit Cardigan — Chunky Brown" ($35 on depop), but the styling model couldn't be reached, so there's no outfit or fit card. Check GEMINI_API_KEY in your .env and your internet connection, then try again." | Added a handler. `suggest_outfit` and `create_fit_card` are each wrapped in `try/except ModelUnavailable`. The handler sets `session["error"]` and stops the loop. |
+
+Trace of the model-unavailable run:
+
+```
+[1] parse_query
+      in:  chunky knit cardigan for fall
+      out: description='chunky knit cardigan for fall', size=None, max_price=None
+[2] search_listings (via MCP)
+      in:  description='chunky knit cardigan for fall', size=None, max_price=None
+      out: 3 items: Knit Cardigan — Chunky Brown, Platform Sneakers — White Chunky Sole, Vintage Knit Vest — Argyle Brown/Cream
+      →    branch: results found, continuing
+[3] select_item
+      in:  3 results
+      out: Knit Cardigan — Chunky Brown ($35.0, depop)
+      →    took the top match
+[4] suggest_outfit
+      in:  new_item='Knit Cardigan — Chunky Brown', wardrobe_items=10
+      →    ModelUnavailable: stopping before create_fit_card
+
+  Found "Knit Cardigan — Chunky Brown" ($35 on depop), but the styling model couldn't be reached, so there's no outfit or fit card. Check GEMINI_API_KEY in your .env and your internet connection, then try again.
+
+1 model calls this session
+```
 
 ---
 
